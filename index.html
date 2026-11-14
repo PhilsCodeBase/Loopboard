@@ -27,7 +27,9 @@ label{color:var(--mut);font-size:12px}
 .grp{display:flex;align-items:center;gap:6px}
 .grp input[type=range]{width:90px}
 #playBtn{background:var(--ok);color:#06210f;border:0;font-weight:700;min-width:96px;padding:10px 16px}
-#playBtn.on{background:var(--rec);color:#fff}
+#playBtn.on{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
+#recAllBtn{background:#3a1f22;color:#ff8a8a;border:1px solid #6b2a30;font-weight:700;min-width:80px;padding:10px 14px}
+#recAllBtn.on{background:var(--rec);color:#fff;border-color:var(--rec);animation:blink 1s infinite}
 #bpm{width:70px;text-align:center;font-weight:700;font-size:16px}
 #tapBtn{font-weight:700;padding:9px 16px}
 #tapBtn.pulse{background:var(--acc);color:#04202e}
@@ -58,7 +60,7 @@ section{margin-top:14px}
 .l2 .sp{flex:1}
 .l3{display:flex;gap:8px;align-items:center}
 .lane{position:relative;height:64px;background:#14171d}
-.lane canvas{position:absolute;inset:0;width:100%;height:100%}
+.lane canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:pan-y;cursor:pointer}
 .ph{position:absolute;top:0;bottom:0;width:2px;background:var(--ok);left:0;display:none;pointer-events:none}
 .addrow{display:flex;gap:8px;padding:10px;flex-wrap:wrap}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
@@ -101,7 +103,8 @@ section{margin-top:14px}
 <div class="app">
   <header class="transport">
     <div class="brand">LOOP BOARD</div>
-    <button id="playBtn">▶ Start</button>
+    <button id="playBtn" title="Wiedergabe starten/stoppen (Leertaste)">▶ Start</button>
+    <button id="recAllBtn" title="Aufnahme starten (mit Vorzähler) bzw. Aufnahme ein/aus während der Wiedergabe">● Rec</button>
     <div class="grp">
       <label for="bpm">BPM</label>
       <button id="bpmDn" aria-label="Langsamer">−</button>
@@ -131,7 +134,7 @@ section{margin-top:14px}
   </section>
 
   <section class="panel" id="panel"></section>
-  <p class="hint">Leertaste = Start/Stopp · Tasten-Spur: A W S E D F T G Z H U J K … spielen, <b>Y</b>/<b>X</b> = Oktave runter/hoch · Pad-Spur: 1 2 3 4 / Q W E R / A S D F / Y X C V · Für minimale Latenz: Kabel-Kopfhörer statt Bluetooth nutzen, Browser-Tab im Vordergrund lassen. Beim Aufnehmen am besten Kopfhörer nutzen, damit das Metronom nicht ins Mikrofon läuft.</p>
+  <p class="hint">Noten in der Spur: anklicken = auswählen (Shift/Strg = mehrere, leere Fläche ziehen = Rahmen, Strg/Cmd+A = alle), Entf = löschen, Strg/Cmd+Z = zurückholen. · Leertaste = Start/Stopp (nur Wiedergabe) · ● Rec = Aufnahme mit Vorzähler, nimmt auf die Spuren mit „Rec“ auf · Tasten-Spur: A W S E D F T G Z H U J K … spielen, <b>Y</b>/<b>X</b> = Oktave runter/hoch · Pad-Spur: 1 2 3 4 / Q W E R / A S D F / Y X C V · Für minimale Latenz: Kabel-Kopfhörer statt Bluetooth nutzen, Browser-Tab im Vordergrund lassen. Beim Aufnehmen am besten Kopfhörer nutzen, damit das Metronom nicht ins Mikrofon läuft.</p>
 </div>
 <div id="toast" role="status"></div>
 
@@ -333,7 +336,7 @@ function toMono(buf) {
 /* ====================== Zustand ====================== */
 const S = {
   ctx: null, bpm: 100, bpb: 4, bars: 2, countIn: 1, metro: true, metroVol: 0.6, quant: 0.25, quantOn: true, masterVol: 0.85,
-  playing: false, t0: 0, nextBeat: 0, timer: null, take: 0,
+  playing: false, recording: false, t0: 0, nextBeat: 0, timer: null, take: 0,
   tracks: [], sel: null, nextId: 1, oct: 0, showKb: true, autoStop: true
 };
 const selTrack = () => S.tracks.find(t => t.id === S.sel) || null;
@@ -526,14 +529,15 @@ function schedule() {
   }
   S.nextBeat = b;
 }
-function play() {
-  const ctx = ensureAudio(), spb = 60 / S.bpm, cb = S.countIn * S.bpb;
+function play(withRec) {
+  const ctx = ensureAudio(), spb = 60 / S.bpm, cb = withRec ? S.countIn * S.bpb : 0;
+  S.recording = !!withRec;
   S.t0 = ctx.currentTime + 0.08 + cb * spb;
   S.nextBeat = -cb; S.playing = true; S.take++;
   S.timer = setInterval(schedule, 20); schedule(); syncTransport();
 }
 function stop() {
-  clearInterval(S.timer); S.playing = false; syncTransport();
+  clearInterval(S.timer); S.playing = false; S.recording = false; syncTransport();
   S.tracks.forEach(t => { if (t.ui.ph) t.ui.ph.style.display = 'none'; });
   $('#ciText').textContent = ''; $('#beats').querySelectorAll('i').forEach(i => i.classList.remove('on'));
 }
@@ -551,7 +555,7 @@ function tapTempo() {
   const b = $('#tapBtn'); b.classList.add('pulse'); setTimeout(() => b.classList.remove('pulse'), 90);
 }
 function recordEvent(t, ev) {
-  if (!S.playing || !t.arm) return;
+  if (!S.playing || !S.recording || !t.arm) return;
   const g = curBeat() - outLatency() / (60 / S.bpm); if (g < 0) return;   // Ausgabe-Latenz herausrechnen
   const L = loopBeats(), k0 = Math.floor(g / L);
   let b = g - k0 * L;
@@ -821,6 +825,7 @@ function buildRow(t) {
         h('input', { type: 'text', class: 'tname', value: t.name, maxlength: 20, 'aria-label': 'Spurname', oninput: e => t.name = e.target.value, onkeydown: e => { if (e.key === 'Enter') e.target.blur(); }, onclick: e => e.stopPropagation() }),
         h('span', { class: 'badge', text: t.type === 'keys' ? 'Tasten' : 'Pads' })),
       h('div', { class: 'l2' }, u.m, u.s, u.r, h('span', { class: 'sp' }),
+        h('button', { text: '⌫', title: 'Ausgewählte Noten löschen (Entf)', 'aria-label': 'Ausgewählte Noten löschen', onclick: e => { e.stopPropagation(); deleteSelected(); } }),
         h('button', { text: '⧉', title: 'Spur duplizieren', 'aria-label': 'Spur duplizieren', onclick: e => { e.stopPropagation(); duplicateTrack(t); } }),
         h('button', { text: '↶', title: 'Letzte Aufnahme rückgängig', 'aria-label': 'Rückgängig', onclick: e => { e.stopPropagation(); undoTake(t); } }),
         h('button', { text: 'Leeren', title: 'Alle Noten dieser Spur löschen', onclick: e => { e.stopPropagation(); t.events = []; drawLane(t); } }),
@@ -829,9 +834,64 @@ function buildRow(t) {
         h('input', { type: 'range', min: 0, max: 1.25, step: 0.01, value: t.vol, 'aria-label': 'Lautstärke ' + t.name, oninput: e => { t.vol = +e.target.value; updateGains(); }, onclick: e => e.stopPropagation() }),
         h('div', { class: 'meter' }, u.meter))),
     h('div', { class: 'lane' }, u.cv, u.ph));
+  laneSelect(t, u);
   $('#rows').append(u.row);
   syncTrackUI(t);
   requestAnimationFrame(() => drawLane(t));
+}
+function evGeom(t, ev, W, H, L) {
+  const x = ev.b / L * W, w = Math.max(4, W / L * 0.3);
+  if (t.type === 'keys') return { x, y: H - 6 - clamp((ev.n - 36) / 60, 0, 1) * (H - 12), w, h: 5 };
+  const rh = (H - 4) / 16;
+  return { x, y: 2 + (15 - ev.p) * rh, w, h: Math.max(2, rh - 0.5) };
+}
+function clearSel() { for (const t of S.tracks) { let ch = false; for (const e of t.events) if (e.sel) { e.sel = false; ch = true; } if (ch) drawLane(t); } }
+function deleteSelected() {
+  const rm = []; let n = 0;
+  for (const t of S.tracks) {
+    const del = t.events.filter(e => e.sel);
+    if (del.length) { rm.push({ t, evs: del }); t.events = t.events.filter(e => !e.sel); n += del.length; drawLane(t); }
+  }
+  if (n) { S.undoDel = rm; say(n + (n === 1 ? ' Note gelöscht' : ' Noten gelöscht') + ' (Strg/Cmd+Z holt sie zurück).'); }
+  else say('Keine Note ausgewählt – Note anklicken (Shift/Strg = mehrere, Rahmen aufziehen).');
+}
+function undoDelete() {
+  const rm = S.undoDel; if (!rm) return;
+  for (const { t, evs } of rm) if (S.tracks.includes(t)) { evs.forEach(e => e.sel = false); t.events.push(...evs); drawLane(t); }
+  S.undoDel = null; say('Gelöschte Noten wiederhergestellt.');
+}
+function laneSelect(t, u) {
+  u.cv.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    const r = u.cv.getBoundingClientRect(), W = r.width, H = r.height, L = loopBeats();
+    const x = e.clientX - r.left, y = e.clientY - r.top, add = e.shiftKey || e.metaKey || e.ctrlKey;
+    const pad = 3;
+    const hit = [...t.events].reverse().find(ev => {
+      if (ev.b >= L) return false; const q = evGeom(t, ev, W, H, L);
+      return x >= q.x - pad && x <= q.x + q.w + pad && y >= q.y - pad - 1 && y <= q.y + q.h + pad + 1;
+    });
+    if (hit) {
+      if (add) hit.sel = !hit.sel; else { clearSel(); hit.sel = true; }
+      drawLane(t); return;
+    }
+    if (!add) clearSel();
+    const base = new Set(t.events.filter(ev => ev.sel));
+    u.mq = { x0: x, y0: y, x1: x, y1: y };
+    try { u.cv.setPointerCapture(e.pointerId); } catch (err) { }
+    const move = ev2 => {
+      if (!u.mq) return;
+      u.mq.x1 = clamp(ev2.clientX - r.left, 0, W); u.mq.y1 = clamp(ev2.clientY - r.top, 0, H);
+      const bx0 = Math.min(u.mq.x0, u.mq.x1), bx1 = Math.max(u.mq.x0, u.mq.x1), by0 = Math.min(u.mq.y0, u.mq.y1), by1 = Math.max(u.mq.y0, u.mq.y1);
+      for (const evt of t.events) {
+        if (evt.b >= L) continue; const q = evGeom(t, evt, W, H, L);
+        evt.sel = base.has(evt) || (q.x + q.w >= bx0 && q.x <= bx1 && q.y + q.h >= by0 && q.y <= by1);
+      }
+      drawLane(t);
+    };
+    const up = () => { u.mq = null; u.cv.removeEventListener('pointermove', move); u.cv.removeEventListener('pointerup', up); u.cv.removeEventListener('pointercancel', up); drawLane(t); };
+    u.cv.addEventListener('pointermove', move); u.cv.addEventListener('pointerup', up); u.cv.addEventListener('pointercancel', up);
+    drawLane(t);
+  });
 }
 function drawLane(t) {
   const cv = t.ui.cv; if (!cv) return;
@@ -846,14 +906,16 @@ function drawLane(t) {
   }
   for (const ev of t.events) {
     if (ev.b >= L) continue;
-    const x = ev.b / L * W, w = Math.max(4, W / L * 0.3);
-    if (t.type === 'keys') {
-      const y = H - 6 - clamp((ev.n - 36) / 60, 0, 1) * (H - 12);
-      g.fillStyle = '#4cc2ff'; g.fillRect(x, y, w, 5);
-    } else {
-      const rh = (H - 4) / 16;
-      g.fillStyle = `hsl(${PADHUE(ev.p)} 75% 60%)`; g.fillRect(x, 2 + (15 - ev.p) * rh, w, Math.max(2, rh - 0.5));
-    }
+    const q = evGeom(t, ev, W, H, L);
+    g.fillStyle = ev.sel ? '#ffffff' : (t.type === 'keys' ? '#4cc2ff' : `hsl(${PADHUE(ev.p)} 75% 60%)`);
+    g.fillRect(q.x, q.y, q.w, q.h);
+    if (ev.sel) { g.strokeStyle = '#ffc857'; g.lineWidth = 2; g.strokeRect(q.x - 2, q.y - 2, q.w + 4, q.h + 4); }
+  }
+  const m = t.ui.mq;
+  if (m) {
+    g.fillStyle = 'rgba(76,194,255,.15)'; g.strokeStyle = '#4cc2ff'; g.lineWidth = 1;
+    const x = Math.min(m.x0, m.x1), y = Math.min(m.y0, m.y1), w = Math.abs(m.x1 - m.x0), hh = Math.abs(m.y1 - m.y0);
+    g.fillRect(x, y, w, hh); g.strokeRect(x + .5, y + .5, w, hh);
   }
 }
 function drawRuler() {
@@ -876,6 +938,12 @@ function buildBeats() {
 /* ====================== Transport-UI ====================== */
 function syncTransport() {
   const b = $('#playBtn'); b.textContent = S.playing ? '■ Stopp' : '▶ Start'; b.classList.toggle('on', S.playing);
+  $('#recAllBtn').classList.toggle('on', S.recording);
+}
+function toggleRec() {
+  if (!S.playing) { play(true); return; }          // Start mit Vorzähler und Aufnahme
+  S.recording = !S.recording; if (S.recording) S.take++;   // während der Wiedergabe ein-/ausklinken
+  syncTransport();
 }
 function fillSelect(sel, items, cur, onChange) {
   const s = $(sel);
@@ -888,7 +956,8 @@ function initTransport() {
   fillSelect('#ciSel', [[0, 'aus'], [1, '1 Takt'], [2, '2 Takte']], S.countIn, v => S.countIn = v);
   fillSelect('#qSel', [[1, '1/4'], [0.5, '1/8'], [0.25, '1/16']], S.quant, v => S.quant = v);
   $('#qBtn').addEventListener('click', e => { S.quantOn = !S.quantOn; e.currentTarget.classList.toggle('on', S.quantOn); $('#qSel').disabled = !S.quantOn; });
-  $('#playBtn').addEventListener('click', () => S.playing ? stop() : play());
+  $('#playBtn').addEventListener('click', () => S.playing ? stop() : play(false));
+  $('#recAllBtn').addEventListener('click', toggleRec);
   $('#bpm').addEventListener('change', e => setBpm(parseFloat(e.target.value) || S.bpm));
   $('#bpmDn').addEventListener('click', () => setBpm(Math.round(S.bpm) - 1));
   $('#bpmUp').addEventListener('click', () => setBpm(Math.round(S.bpm) + 1));
@@ -1035,10 +1104,19 @@ async function loadProject(file) {
 const heldKeys = new Map();
 addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveProject(); return; }
+  {
+    const t0 = e.target, inText = t0.matches && t0.matches('input[type=text],input[type=number],textarea,select'), k0 = e.key.toLowerCase();
+    if (!inText) {
+      if ((e.metaKey || e.ctrlKey) && k0 === 'z') { e.preventDefault(); undoDelete(); return; }
+      if ((e.metaKey || e.ctrlKey) && k0 === 'a') { e.preventDefault(); const st = selTrack(); if (st) { st.events.forEach(ev => ev.sel = true); drawLane(st); } return; }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !e.metaKey && !e.ctrlKey) { e.preventDefault(); deleteSelected(); return; }
+      if (e.key === 'Escape') { clearSel(); return; }
+    }
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const tg = e.target;
   if (tg.matches && tg.matches('input[type=text],input[type=number],textarea,select')) return;
-  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) (S.playing ? stop() : play()); return; }
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) (S.playing ? stop() : play(false)); return; }
   if (e.repeat) return;
   const k = e.key.toLowerCase(), t = selTrack(); if (!t) return;
   if (t.type === 'keys') {
