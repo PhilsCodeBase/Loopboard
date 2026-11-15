@@ -94,6 +94,22 @@ section{margin-top:14px}
 .pad.sel{border-color:var(--acc)}
 .pad.hit{filter:brightness(1.8)}
 .autofx{margin:10px 0}.autorow{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:4px}
+.guide{background:var(--panel);border:1px solid var(--acc);border-radius:14px;padding:14px 16px}
+.guide .gh{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
+.guide ol{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.guide li{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;font-size:13px}
+.guide li b{display:flex;align-items:center;gap:8px;font-size:14px}
+.guide li .n{width:22px;height:22px;border-radius:50%;background:var(--line);display:inline-flex;align-items:center;justify-content:center;font-size:12px}
+.guide li.done{opacity:.6}.guide li.done .n{background:var(--ok);color:#06210f}
+.guide li.now{border-color:var(--warn);box-shadow:0 0 0 2px #ffc85740}.guide li.now .n{background:var(--warn);color:#2a1e00}
+.guide li span.t{color:var(--mut)}
+.howto{border:2px dashed var(--warn);border-radius:12px;padding:12px 14px;margin:0 0 12px;background:#ffc8570f}
+.howto ol{margin:6px 0 0 18px;padding:0;display:flex;flex-direction:column;gap:3px}
+.attn{animation:attn 1.2s infinite}
+@keyframes attn{0%,100%{box-shadow:0 0 0 0 #ff5d5d99}50%{box-shadow:0 0 0 9px #ff5d5d00}}
+.badge.empty{color:#2a1e00;background:var(--warn);border-color:var(--warn);font-weight:700}
+.kbbox{position:relative}.kbbox.dim .kb{opacity:.4}
+.kbempty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;font-weight:700;color:var(--warn);pointer-events:none;padding:10px;text-shadow:0 1px 4px #000}
 .hint{color:var(--mut);font-size:12px;margin-top:10px}
 #toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);background:#000c;border:1px solid var(--line);padding:8px 14px;border-radius:10px;max-width:90vw;display:none;z-index:50}
 .chk{display:flex;gap:6px;align-items:center;color:var(--txt);font-size:13px}
@@ -119,10 +135,13 @@ section{margin-top:14px}
     <div class="grp"><button id="qBtn" class="tog on" title="Noten beim Aufnehmen auf das Raster schieben (aus = exakt wie gespielt)">Quantisierung</button><select id="qSel" aria-label="Raster"></select></div>
     <div class="grp"><label for="masterVol">Master</label><input id="masterVol" type="range" min="0" max="1" step="0.01" value="0.85"><div class="meter"><i id="mMeter"></i></div></div>
     <div class="grp"><button id="saveBtn" title="Projekt als Datei speichern (Strg/Cmd+S)">Speichern</button><button id="loadBtn">Laden …</button><input id="loadFile" type="file" accept=".json,application/json" hidden></div>
+    <button id="helpBtn" title="Anleitung ein-/ausblenden">? Anleitung</button>
     <div class="beats" id="beats" aria-hidden="true"></div>
     <div id="ciText" aria-live="polite"></div>
     <div class="status" id="lat" title="Ausgabe-Latenz der Soundkarte/Kopfhörer"></div>
   </header>
+
+  <section class="guide" id="guide"></section>
 
   <section class="tracks" id="tracks">
     <div class="trow ruler"><div class="thead">Spuren</div><div class="lane" style="height:24px"><canvas id="ruler"></canvas></div></div>
@@ -235,21 +254,24 @@ function shiftAsync(x, ratio, sr, cb) {
 function trimSilence(x, sr, maxSec) {
   let peak = 0;
   for (let i = 0; i < x.length; i++) { const a = Math.abs(x[i]); if (a > peak) peak = a; }
-  if (peak < 0.004) return null;
-  const thr = Math.max(peak * 0.06, 0.008);
+  if (peak < 0.0008) return null;                       // wirklich nichts aufgenommen
+  const blk = Math.max(16, Math.floor(0.01 * sr)), rm = [];
+  for (let b = 0; b + blk <= x.length; b += blk) { let q = 0; for (let i = b; i < b + blk; i++) q += x[i] * x[i]; rm.push(Math.sqrt(q / blk)); }
+  const sorted = rm.slice().sort((a, b) => a - b), noise = sorted.length ? sorted[Math.floor(sorted.length * 0.1)] : 0;   // Grundrauschen
+  const thr = Math.max(peak * 0.06, Math.min(noise * 3, peak * 0.25), 0.0004);
   let i0 = 0; while (i0 < x.length && Math.abs(x[i0]) < thr) i0++;
   if (i0 >= x.length) return null;
   let start = Math.max(0, i0 - 16);
   for (let j = i0; j > Math.max(1, i0 - 400); j--) {
     if ((x[j - 1] <= 0 && x[j] > 0) || (x[j - 1] >= 0 && x[j] < 0)) { start = j; break; }
   }
-  const blk = Math.max(16, Math.floor(0.01 * sr));
+  const endThr = Math.max(peak * 0.03, Math.min(noise * 2, peak * 0.15));
   const limit = Math.min(x.length, start + Math.floor(maxSec * sr));
   let last = start;
   for (let b = start; b < limit; b += blk) {
-    let s = 0, n = 0;
-    for (let i = b; i < Math.min(limit, b + blk); i++) { s += x[i] * x[i]; n++; }
-    if (Math.sqrt(s / n) > peak * 0.03) last = Math.min(limit, b + blk);
+    let q = 0, n = 0;
+    for (let i = b; i < Math.min(limit, b + blk); i++) { q += x[i] * x[i]; n++; }
+    if (Math.sqrt(q / n) > endThr) last = Math.min(limit, b + blk);
   }
   const len = Math.max(Math.floor(0.05 * sr), last - start);
   return x.slice(start, start + Math.min(len, x.length - start));
@@ -303,7 +325,7 @@ function autoComp(x, sr) {
 function autoLevel(x, sr, loud, lim) {
   const pk = peakOfArr(x); if (pk < 1e-6) return x;
   const ceil = 0.89, n = x.length; let g = 1;
-  if (loud) { g = Math.pow(10, Math.max(-12, Math.min(24, -16 - dbOf(rmsOf(x)))) / 20); g = Math.min(g, (lim ? ceil * 2 : 0.95) / pk); }
+  if (loud) { g = Math.pow(10, Math.max(-12, Math.min(40, -16 - dbOf(rmsOf(x)))) / 20); g = Math.min(g, (lim ? ceil * 2 : 0.95) / pk); }
   const y = new Float32Array(n);
   for (let i = 0; i < n; i++) y[i] = x[i] * g;
   if (!lim) { for (let i = 0; i < n; i++) y[i] = Math.max(-1, Math.min(1, y[i])); return y; }
@@ -318,7 +340,7 @@ const DEFAULT_AUTO = { trim: true, eq: true, comp: true, loud: true, lim: true }
 function processRaw(raw, sr, o, maxSec) {
   let y;
   if (o.trim) { y = trimSilence(raw, sr, maxSec); if (!y) return null; }
-  else { y = raw.slice(0, Math.floor(maxSec * sr)); if (peakOfArr(y) < 0.004) return null; }
+  else { y = raw.slice(0, Math.floor(maxSec * sr)); if (peakOfArr(y) < 0.0008) return null; }
   if (o.eq) y = autoEq(y, sr);
   if (o.comp) y = autoComp(y, sr);
   if (o.loud || o.lim) y = autoLevel(y, sr, o.loud, o.lim);
@@ -335,7 +357,7 @@ function toMono(buf) {
 
 /* ====================== Zustand ====================== */
 const S = {
-  ctx: null, bpm: 100, bpb: 4, bars: 2, countIn: 1, metro: true, metroVol: 0.6, quant: 0.25, quantOn: true, masterVol: 0.85,
+  ctx: null, bpm: 100, bpb: 4, bars: 2, countIn: 1, metro: true, metroVol: 0.6, quant: 0.25, quantOn: true, boostMic: true, masterVol: 0.85,
   playing: false, recording: false, t0: 0, nextBeat: 0, timer: null, take: 0,
   tracks: [], sel: null, nextId: 1, oct: 0, showKb: true, autoStop: true
 };
@@ -542,7 +564,7 @@ function stop() {
   $('#ciText').textContent = ''; $('#beats').querySelectorAll('i').forEach(i => i.classList.remove('on'));
 }
 function setBpm(v) {
-  v = clamp(Math.round(v * 10) / 10, 40, 240);
+  v = clamp(Math.round(v * 10) / 10, 40, 240); S.tempoTouched = true;
   if (S.playing) { const g = curBeat(); S.t0 = S.ctx.currentTime - g * (60 / v); }
   S.bpm = v; $('#bpm').value = v; updateDelayTimes();
 }
@@ -571,7 +593,8 @@ function undoTake(t) {
 
 /* ====================== Spielen (Tasten / Pads) ====================== */
 function hitKey(t, m) {
-  if (!t.sample) { say('Noch kein Sound – unten auf „Aufnehmen“ klicken.'); return; }
+  if (!t.sample) { say('Noch kein Sound – erst „● Aufnehmen“ klicken und einen Ton machen.'); const b = $('#recBtn'); if (b) b.scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
+  S.played = true;
   const ctx = ensureAudio();
   playKey(t, m, 0, 1);
   recordEvent(t, { n: m, v: 1 });
@@ -580,7 +603,8 @@ function hitPad(t, i) {
   const ctx = ensureAudio();
   if (t.selPad !== i && t.ui.selectPad) t.ui.selectPad(i);
   const el = t.padEls[i]; if (el) { el.classList.add('hit'); setTimeout(() => el.classList.remove('hit'), 110); }
-  if (!t.pads[i].buffer) return;
+  if (!t.pads[i].buffer) { say('Pad ' + (i + 1) + ' ist leer – rechts „● Aufnehmen“ klicken und einen Sound machen.'); return; }
+  S.played = true;
   playPad(t, i, 0, 1);
   recordEvent(t, { p: i, v: 1 });
 }
@@ -594,21 +618,23 @@ async function toggleRecord(target) {
   }
   const ctx = ensureAudio();
   let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: S.boostMic } }); }
   catch (err) { say('Mikrofon-Zugriff nicht erlaubt.'); return; }
   const mr = new MediaRecorder(stream), chunks = [];
   const srcN = ctx.createMediaStreamSource(stream), an = ctx.createAnalyser(); an.fftSize = 1024; srcN.connect(an);
   const buf = new Float32Array(an.fftSize), tStart = performance.now(), maxMs = target.pad != null ? 6000 : 4000;
-  let heard = false, quiet = 0;
+  let heard = false, quiet = 0, thr = 0.03, noiseMin = 1;
   const r = { target, level: 0, stop() { if (mr.state !== 'inactive') mr.stop(); } };
   mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   const iv = setInterval(() => {
     an.getFloatTimeDomainData(buf);
     let pk = 0; for (let i = 0; i < buf.length; i++) pk = Math.max(pk, Math.abs(buf[i]));
-    r.level = pk;
+    r.level = pk; r.heard = heard;
     const now = performance.now();
-    if (pk > 0.04) { heard = true; quiet = 0; }
-    else if (heard && S.autoStop) { if (!quiet) quiet = now; else if (now - quiet > 800) r.stop(); }
+    if (now - tStart < 350) { noiseMin = Math.min(noiseMin, pk); thr = Math.min(0.04, Math.max(0.008, noiseMin * 2.5)); }   // Raumgeräusch messen → empfindlich auch bei leiser Stimme
+    if (pk > thr) { heard = true; quiet = 0; }
+    else if (heard && S.autoStop && pk < thr * 0.7) { if (!quiet) quiet = now; else if (now - quiet > 1000) r.stop(); }
+    else if (heard) quiet = 0;
     if (now - tStart > maxMs) r.stop();
   }, 30);
   mr.onstop = async () => {
@@ -638,7 +664,7 @@ function buildSample(target) {
   if (pad != null) { owner.buffer = b; applyTempo(owner); }
   else { t.sample = { buffer: b, data: y, sr, cache: new Map(), pending: new Set() }; requestPitches(t); }
   if (selTrack() === t) renderPanel();
-  say('Verarbeitet: ' + (y.length / sr).toFixed(2) + ' s');
+  say('Fertig: ' + (y.length / sr).toFixed(2) + ' s zugeschnitten – ' + (pad != null ? 'jetzt das Pad antippen!' : 'jetzt Klaviatur spielen!'));
 }
 function autoControls(owner, target) {
   const items = [['trim', 'Stille am Anfang/Ende entfernen'], ['eq', 'Auto-EQ'], ['comp', 'Kompressor'], ['loud', 'Lauter machen'], ['lim', 'Limiter']];
@@ -672,13 +698,15 @@ function drawWave(cv, buffer) {
     g.fillRect(x, hh / 2 - mx * hh / 2, 1, Math.max(1, (mx - mn) * hh / 2));
   }
 }
-function recControls(target) {
+function recControls(target, attn) {
   const file = h('input', { type: 'file', accept: 'audio/*', hidden: true, onchange: e => { loadFile(e.target.files[0], target); e.target.value = ''; } });
   return h('div', { class: 'recrow' },
-    h('button', { id: 'recBtn', class: 'recbtn' + (rec ? ' on' : ''), text: rec ? '■ Stopp' : '● Aufnehmen', onclick: () => toggleRecord(target) }),
+    h('button', { id: 'recBtn', class: 'recbtn' + (rec ? ' on' : '') + (attn ? ' attn' : ''), text: rec ? '■ Stopp' : '● Aufnehmen', onclick: () => toggleRecord(target) }),
     h('button', { text: 'Audiodatei laden …', onclick: () => file.click() }), file,
     h('div', { class: 'meter', style: 'width:120px' }, h('i', { id: 'recMeter' })),
-    h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: S.autoStop, onchange: e => S.autoStop = e.target.checked }), 'Auto-Stopp bei Stille'));
+    h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: S.autoStop, onchange: e => S.autoStop = e.target.checked }), 'Auto-Stopp bei Stille'),
+    h('label', { class: 'chk', title: 'Schaltet die automatische Mikrofon-Verstärkung des Browsers ein – hilft bei leisem Sprechen/Singen' }, h('input', { type: 'checkbox', checked: S.boostMic, onchange: e => S.boostMic = e.target.checked }), 'Leise Stimme verstärken'),
+    h('div', { class: 'status', id: 'recStatus', style: 'width:100%;color:var(--warn)' }));
 }
 
 /* ====================== UI: Instrument-Panels ====================== */
@@ -693,7 +721,14 @@ function changeOct(d) {
 }
 function keysPanel(t) {
   const box = h('div');
-  box.append(h('h2', { text: 'Tasten-Sampler · ' + t.name }), recControls({ t }));
+  box.append(h('h2', { text: 'Tasten-Sampler · ' + t.name }));
+  if (!t.sample) box.append(h('div', { class: 'howto' }, h('strong', { text: '👉 Dieses Instrument ist noch leer – zuerst einen Sound aufnehmen:' }),
+    h('ol', {},
+      h('li', { text: 'Unten auf „● Aufnehmen“ klicken (beim ersten Mal im Browser „Mikrofon erlauben“ wählen).' }),
+      h('li', { text: 'Einen kurzen Ton machen: singen, summen, sprechen, pfeifen, klatschen … etwa 1 Sekunde reicht – auch leise geht (wird automatisch lauter gemacht).' }),
+      h('li', { text: 'Die Aufnahme endet von selbst nach dem Ton (oder auf „■ Stopp“ klicken). Stille am Anfang und Ende wird automatisch entfernt.' }),
+      h('li', { text: 'Danach die Klaviatur spielen: jede Taste spielt deinen Ton in anderer Tonhöhe, immer gleich lang. Alternativ: „Audiodatei laden …“.' }))));
+  box.append(recControls({ t }, !t.sample));
   const cv = h('canvas', { class: 'wave' }); box.append(cv);
   requestAnimationFrame(() => drawWave(cv, t.sample && t.sample.buffer));
   const root = h('select', { 'aria-label': 'Grundton', onchange: e => { t.root = +e.target.value; requestPitches(t); } },
@@ -729,12 +764,21 @@ function keysPanel(t) {
       kb.append(el);
     }
     // schwarze Tasten oben (z-index per CSS)
-    box.append(h('div', { class: 'kbwrap' }, kb));
+    box.append(h('div', { class: 'kbwrap' }, h('div', { class: 'kbbox' + (t.sample ? '' : ' dim') }, kb,
+      t.sample ? null : h('div', { class: 'kbempty', text: 'Noch kein Sound – zuerst oben aufnehmen' }))));
   }
   setTimeout(updateKeysStatus, 0);
   return box;
 }
 const PADHUE = i => (i * 23 + 200) % 360;
+function padHowto(i) {
+  return h('div', { class: 'howto' }, h('strong', { text: '👉 Pad ' + (i + 1) + ' ist noch leer – so belegst du es:' }),
+    h('ol', {},
+      h('li', { text: 'Auf „● Aufnehmen“ klicken (beim ersten Mal Mikrofon erlauben).' }),
+      h('li', { text: 'Einen kurzen Sound machen: klatschen, schnipsen, „Bum“ sagen, klopfen …' }),
+      h('li', { text: 'Die Aufnahme endet von selbst, wird automatisch zugeschnitten und lässt sich unten mit Effekten und Lautstärke anpassen.' }),
+      h('li', { text: 'Danach das Pad antippen (oder die Taste daneben) zum Abspielen. Zum Belegen eines anderen Pads einfach dieses antippen.' })));
+}
 function padPanel(t) {
   const box = h('div'), wrap = h('div', { class: 'padwrap' }), edit = h('div');
   box.append(h('h2', { text: 'Drum-Pad-Sampler · ' + t.name }));
@@ -759,7 +803,7 @@ function padPanel(t) {
       h('div', { class: 'recrow' }, h('strong', { text: 'Pad ' + (i + 1) }), nameIn,
         h('button', { text: '▶ Anspielen', onclick: () => { ensureAudio(); playPad(t, i, 0, 1); } }),
         h('button', { text: 'Leeren', onclick: () => { t.pads[i] = newPad(i); t.padEls[i].classList.add('empty'); t.padEls[i].firstChild.textContent = t.pads[i].name; renderEdit(); } })),
-      recControls({ t, pad: i }), cv, autoControls(p, { t, pad: i }),
+      p.buffer ? null : padHowto(i), recControls({ t, pad: i }, !p.buffer), cv, autoControls(p, { t, pad: i }),
       h('div', { class: 'ctrls' },
         slider('Lautstärke', 0, 1.5, 0.01, p.vol, v => Math.round(v * 100) + ' %', v => p.vol = v),
         slider('Tempo (Tonhöhe bleibt)', 0.5, 2, 0.01, p.tempo, v => '×' + v.toFixed(2), v => { p.tempo = v; clearTimeout(p.tt); p.tt = setTimeout(() => applyTempo(p), 120); }),
@@ -823,7 +867,7 @@ function buildRow(t) {
     h('div', { class: 'thead' },
       h('div', { class: 'l1' },
         h('input', { type: 'text', class: 'tname', value: t.name, maxlength: 20, 'aria-label': 'Spurname', oninput: e => t.name = e.target.value, onkeydown: e => { if (e.key === 'Enter') e.target.blur(); }, onclick: e => e.stopPropagation() }),
-        h('span', { class: 'badge', text: t.type === 'keys' ? 'Tasten' : 'Pads' })),
+        (u.badge = h('span', { class: 'badge', text: t.type === 'keys' ? 'Tasten' : 'Pads' }))),
       h('div', { class: 'l2' }, u.m, u.s, u.r, h('span', { class: 'sp' }),
         h('button', { text: '⌫', title: 'Ausgewählte Noten löschen (Entf)', 'aria-label': 'Ausgewählte Noten löschen', onclick: e => { e.stopPropagation(); deleteSelected(); } }),
         h('button', { text: '⧉', title: 'Spur duplizieren', 'aria-label': 'Spur duplizieren', onclick: e => { e.stopPropagation(); duplicateTrack(t); } }),
@@ -1163,10 +1207,45 @@ function frame() {
     }
     for (const t of S.tracks) if (t.an && t.ui.meter) t.ui.meter.style.width = Math.min(100, peakOf(t.an) * 130) + '%';
     if (S.masterAn) $('#mMeter').style.width = Math.min(100, peakOf(S.masterAn) * 130) + '%';
-    const rm = $('#recMeter'); if (rm) rm.style.width = rec ? Math.min(100, rec.level * 200) + '%' : '0%';
+    const rs = $('#recStatus'); if (rs) rs.textContent = rec ? (rec.heard ? '● Ton erkannt – die Aufnahme endet bei Stille oder mit „■ Stopp“.' : '● Aufnahme läuft – jetzt den Ton machen …') : '';
+    const rm = $('#recMeter'); if (rm) rm.style.width = rec ? Math.min(100, Math.sqrt(rec.level) * 110) + '%' : '0%';
   }
   requestAnimationFrame(frame);
 }
+
+/* ====================== Anleitung / Hinweise ====================== */
+let guideHidden = false, guideForce = false, guideSig = '';
+try { guideHidden = localStorage.getItem('lb-guide-hidden') === '1'; } catch (e) { }
+const anySound = () => S.tracks.some(t => t.sample || (t.pads && t.pads.some(p => p.buffer)));
+function refreshHints() {
+  for (const t of S.tracks) {
+    const b = t.ui.badge; if (!b) continue;
+    const empty = t.type === 'keys' ? !t.sample : !t.pads.some(p => p.buffer);
+    const txt = (t.type === 'keys' ? 'Tasten' : 'Pads') + (empty ? ' · leer – Sound aufnehmen!' : '');
+    if (b.textContent !== txt) b.textContent = txt;
+    b.classList.toggle('empty', empty);
+  }
+  const done = [anySound(), !!S.played, !!S.tempoTouched, S.tracks.some(t => t.events.length)];
+  const required = done[0] && done[1] && done[3];
+  const show = !guideHidden && (!required || guideForce);
+  const sig = done.join() + show;
+  if (sig === guideSig) return; guideSig = sig;
+  const g = $('#guide'); g.replaceChildren(); g.style.display = show ? '' : 'none';
+  if (!show) return;
+  const steps = [
+    ['Sound aufnehmen', 'Spur anklicken, dann unten „● Aufnehmen“ drücken (Mikrofon erlauben) und einen kurzen Ton oder Schlag machen. Die Aufnahme stoppt von selbst und wird automatisch zugeschnitten.'],
+    ['Ausprobieren', 'Tasten-Spur: Klaviatur antippen oder Laptop-Tasten A S D F … Pad-Spur: Pads antippen – jedes Pad kann einen eigenen Sound haben.'],
+    ['Tempo einstellen (optional)', 'Mit „Tap“ im Takt tippen oder die BPM eintragen. Das Metronom hilft beim Einspielen.'],
+    ['Loop aufnehmen', '„● Rec“ oben drücken: nach dem Vorzähler spielst du ein, der Loop wiederholt sich. Weitere Spuren legst du darüber.']
+  ];
+  const cur = [0, 1, 3].find(i => !done[i]);
+  g.append(h('div', { class: 'gh' }, h('strong', { text: 'So legst du los' }),
+    h('button', { text: 'Ausblenden', onclick: () => { guideHidden = true; guideForce = false; try { localStorage.setItem('lb-guide-hidden', '1'); } catch (e) { } guideSig = ''; refreshHints(); } })),
+    h('ol', {}, steps.map(([ti, tx], i) => h('li', { class: (done[i] ? 'done' : '') + (i === cur ? ' now' : '') },
+      h('b', {}, h('span', { class: 'n', text: done[i] ? '✓' : String(i + 1) }), ti + (i === cur ? '  ← jetzt' : '')), h('span', { class: 't', text: tx })))));
+}
+$('#helpBtn').addEventListener('click', () => { guideHidden = false; guideForce = true; try { localStorage.removeItem('lb-guide-hidden'); } catch (e) { } guideSig = ''; refreshHints(); });
+setInterval(refreshHints, 400);
 
 /* Audio beim allerersten Tippen/Tastendruck sofort entsperren, damit der erste Ton nicht verzögert ist */
 for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { ensureAudio(); }, { capture: true });
@@ -1176,6 +1255,7 @@ setInterval(() => { const el = $('#lat'); if (el && S.ctx) el.textContent = 'Lat
 initTransport(); buildBeats();
 addTrack('keys'); addTrack('pad');
 S.sel = S.tracks[0].id; S.tracks.forEach(syncTrackUI); renderPanel(); drawAll();
+refreshHints();
 requestAnimationFrame(frame);
 </script>
 </body>
