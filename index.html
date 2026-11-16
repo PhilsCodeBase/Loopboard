@@ -207,7 +207,7 @@ section{margin-top:14px}
 
   <section class="panel" id="panel"></section>
   <section class="mixer" id="mixer" style="display:none"></section>
-  <p class="hint">Noten in der Spur: anklicken = auswählen (Shift/Strg = mehrere, leere Fläche ziehen = Rahmen, Strg/Cmd+A = alle), Entf = löschen, Strg/Cmd+Z = rückgängig, Strg/Cmd+Shift+Z = wiederherstellen (gilt für alle Aktionen). · Leertaste = Start/Stopp (nur Wiedergabe) · ● Rec = Aufnahme mit Vorzähler, nimmt auf die Spuren mit „Rec“ auf · Tasten-Spur: A W S E D F T G Z H U J K … spielen, <b>Y</b>/<b>X</b> = Oktave runter/hoch · Pad-Spur: 1 2 3 4 / Q W E R / A S D F / Y X C V · Für minimale Latenz: Kabel-Kopfhörer statt Bluetooth nutzen, Browser-Tab im Vordergrund lassen. Beim Aufnehmen am besten Kopfhörer nutzen, damit das Metronom nicht ins Mikrofon läuft.</p>
+  <p class="hint">Noten in der Spur: anklicken = auswählen (Shift/Strg = mehrere, leere Fläche ziehen = Rahmen, Strg/Cmd+A = alle), Entf = löschen, Strg/Cmd+Z = rückgängig, Strg/Cmd+Shift+Z = wiederherstellen (gilt für alle Aktionen). · Sektionen: jede hat eigenes Tempo, Taktart und Länge (bis 16 Takte); Song-Modus spielt sie nacheinander mit Wiederholungen · Mikro-Spur: Parts anklicken, ziehen, Ränder kürzen, Doppelklick teilen · Leertaste = Start/Stopp (nur Wiedergabe) · ● Rec = Aufnahme mit Vorzähler, nimmt auf die Spuren mit „Rec“ auf · Tasten-Spur: A W S E D F T G Z H U J K … spielen, <b>Y</b>/<b>X</b> = Oktave runter/hoch · Pad-Spur: 1 2 3 4 / Q W E R / A S D F / Y X C V · Für minimale Latenz: Kabel-Kopfhörer statt Bluetooth nutzen, Browser-Tab im Vordergrund lassen. Beim Aufnehmen am besten Kopfhörer nutzen, damit das Metronom nicht ins Mikrofon läuft.</p>
 </div>
 <div id="toast" role="status"></div>
 
@@ -829,8 +829,8 @@ async function startRecAll() {
   }
   play(true);
   if (ok && mic) {
-    const P = S.passes.find(p => !p.countIn);
-    S.micRec = { tracks: armed, tStart: P.t0 + outLatency() + mic.lat, dur: P.len * P.spb, beats: P.len, bpm: secById(P.sec).bpm, endBeat: P.len, sec: P.sec, no: P.no };
+    const cp = S.passes[0], sec = secById(cp.sec), L = secBeats(sec), t0 = cp.countIn ? cp.t0 + cp.len * cp.spb : cp.t0;   // erster echter Durchgang (nach dem Vorzähler)
+    S.micRec = { tracks: armed, tStart: t0 + outLatency() + mic.lat, dur: L * 60 / sec.bpm, beats: L, bpm: sec.bpm, endBeat: L, sec: sec.id, no: 0 };
   }
 }
 function micTick() {
